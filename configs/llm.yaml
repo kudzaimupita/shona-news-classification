@@ -1,0 +1,13 @@
+# Large language model baselines via the Message Batches API.
+
+models: [claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5]
+effort: low
+max_tokens: 2048
+shots: [0, 1]          # examples per label, drawn from the training split
+shot_seed: 31
+evaluations:
+  - {task: sib200, variants: [sna, eng]}
+  - {task: masakhanews, variants: [sna, eng]}
+
+output_dir: results/llm
+batch_record: results/llm/batch.json

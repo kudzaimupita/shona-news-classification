@@ -1,0 +1,28 @@
+# Fine-tuning grid. One run per model x task x variant x seed.
+
+models:
+  afro-xlmr-base: Davlan/afro-xlmr-base
+  xlm-roberta-base: FacebookAI/xlm-roberta-base
+
+runs:
+  - {task: sib200, variants: [sna, eng]}
+  - {task: masakhanews, variants: [sna, eng_matched, eng]}
+
+seeds: [13, 42, 123, 2024, 7]
+
+training:
+  learning_rate: 2.0e-5
+  batch_size: 16
+  epochs: 10
+  max_length: 256
+  warmup_ratio: 0.1
+  weight_decay: 0.01
+  early_stopping_patience: 3
+
+# Models trained on English are also evaluated on the parallel Shona test set.
+cross_lingual:
+  task: sib200
+  train_variant: eng
+  eval_variant: sna
+
+output_dir: results/encoders

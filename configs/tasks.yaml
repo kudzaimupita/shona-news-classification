@@ -1,0 +1,25 @@
+# Tasks and language variants. Hub configs are fixed so that results are reproducible.
+
+tasks:
+  sib200:
+    dataset: Davlan/sib200
+    label_field: category
+    text_fields: [text]
+    id_field: index_id
+    labels: [entertainment, geography, health, politics, science/technology, sports, travel]
+    languages:
+      sna: sna_Latn
+      eng: eng_Latn
+
+  masakhanews:
+    dataset: masakhane/masakhanews
+    label_field: category
+    text_fields: [headline, text]
+    id_field: url
+    labels: [business, health, politics, sports]
+    languages:
+      sna: sna
+      eng: eng
+
+# English subsampled per label to the Shona training counts of the same task.
+size_matched_seed: 2026
