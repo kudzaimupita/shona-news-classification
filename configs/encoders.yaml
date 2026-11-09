@@ -15,7 +15,7 @@ training:
   batch_size: 16
   epochs: 10
   max_length: 256
-  warmup_ratio: 0.1
+  warmup_fraction: 0.1
   weight_decay: 0.01
   early_stopping_patience: 3
 
