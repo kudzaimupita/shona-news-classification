@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import json
 import statistics
+import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Annotated, cast, get_args
 
+import anthropic
 import typer
+from dotenv import load_dotenv
 from transformers import AutoTokenizer
 
-from shona_news import classical
-from shona_news.config import Variant, load_classical, load_encoders, load_tasks
+from shona_news import classical, llm
+from shona_news.config import Variant, load_classical, load_encoders, load_llm, load_tasks
 from shona_news.data import TaskData, load_variant
 from shona_news.encoders import fine_tune
 from shona_news.fertility import fertility
@@ -194,3 +197,81 @@ def summary() -> None:
     table = "\n".join(lines) + "\n"
     (RESULTS / "summary.md").write_text(table, encoding="utf-8")
     typer.echo(table)
+
+
+@app.command("llm-submit")
+def llm_submit(
+    yes: Annotated[bool, typer.Option("--yes", help="Submit without confirmation.")] = False,
+) -> None:
+    """Submit one batch covering every configured model, task, variant and shot count."""
+    tasks, config = load_tasks(), load_llm()
+    if config.batch_record.exists():
+        raise typer.BadParameter(f"{config.batch_record} exists; a batch was already submitted")
+
+    keyed = []
+    for group in config.evaluations:
+        for variant in group.variants:
+            data = load_variant(tasks, group.task, variant)
+            keyed += [
+                (key, request, data.labels) for key, request in llm.build_requests(data, config)
+            ]
+    if not yes:
+        typer.confirm(f"Submit {len(keyed)} requests to {', '.join(config.models)}?", abort=True)
+
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+    with (config.output_dir / "requests.jsonl").open("w", encoding="utf-8") as handle:
+        for key, _, labels in keyed:
+            handle.write(json.dumps({**key.model_dump(), "labels": list(labels)}) + "\n")
+
+    load_dotenv()
+    batch = anthropic.Anthropic().messages.batches.create(requests=[r for _, r, _ in keyed])
+    config.batch_record.write_text(
+        json.dumps({"batch_id": batch.id, "n_requests": len(keyed)}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    typer.echo(f"Submitted {batch.id} ({len(keyed)} requests)")
+
+
+@app.command("llm-collect")
+def llm_collect(poll_seconds: Annotated[int, typer.Option(min=10)] = 60) -> None:
+    """Wait for the batch, then record one run per model, task, variant and shot count."""
+    tasks, config = load_tasks(), load_llm()
+    batch_id = json.loads(config.batch_record.read_text(encoding="utf-8"))["batch_id"]
+    load_dotenv()
+    client = anthropic.Anthropic()
+    while client.messages.batches.retrieve(batch_id).processing_status != "ended":
+        time.sleep(poll_seconds)
+
+    with (config.output_dir / "requests.jsonl").open(encoding="utf-8") as handle:
+        rows = [json.loads(line) for line in handle]
+    keys = {
+        llm.RequestKey(**{k: row[k] for k in llm.RequestKey.model_fields}): row["labels"]
+        for row in rows
+    }
+    labels_of = {key.custom_id(): labels for key, labels in keys.items()}
+    outcome = llm.collect(client.messages.batches.results(batch_id), labels_of)
+
+    runs: dict[tuple[str, str, str, int], list[llm.RequestKey]] = defaultdict(list)
+    for key in keys:
+        runs[(key.model, key.task, key.variant, key.shots)].append(key)
+    for (model, task, variant, shots), run_keys in sorted(runs.items()):
+        data = load_variant(tasks, task, cast(Variant, variant))
+        ordered = sorted(run_keys, key=lambda k: k.index)
+        predictions = [outcome.predictions.get(k.custom_id(), llm.INVALID) for k in ordered]
+        record = record_run(
+            system=f"{model}_k{shots}",
+            task=task,
+            train_variant=variant,
+            eval_variant=variant,
+            split="test",
+            seed=None,
+            examples=[data.test[k.index] for k in ordered],
+            predictions=predictions,
+            details={"invalid": predictions.count(llm.INVALID)},
+        )
+        typer.echo(f"{model} k={shots} {task} {variant}: macro-F1 {record.macro_f1:.3f}")
+    usage = {"input_tokens": outcome.input_tokens, "output_tokens": outcome.output_tokens}
+    (config.output_dir / "usage.json").write_text(
+        json.dumps(usage, indent=2) + "\n", encoding="utf-8"
+    )
+    typer.echo(f"usage {usage}")
